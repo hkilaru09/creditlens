@@ -10,6 +10,47 @@ first-pass risk memo before real analysis starts.
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    User(("Analyst<br/>ticker + question")) --> CLI["CLI<br/>creditlens"]
+    CLI --> LLM
+
+    subgraph SEC["SEC EDGAR (live, no API key)"]
+        direction TB
+        EDGARC["EDGAR client<br/>submissions + filings"]
+        XBRL["XBRL parser<br/>current ratio, debt/equity,<br/>debt/EBITDA, interest coverage"]
+        EDGARC --> XBRL
+    end
+
+    subgraph RAG["Local RAG index"]
+        direction TB
+        Chunk["Chunk filing HTML<br/>into plain-text windows"]
+        Embed["sentence-transformers<br/>local embeddings"]
+        Store[("Chroma<br/>vector store")]
+        Chunk --> Embed --> Store
+    end
+    EDGARC --> Chunk
+
+    subgraph AgentLoop["Tool-use agent loop"]
+        direction TB
+        LLM["LLM backend<br/>Claude or Gemini"]
+        Tools{{"list_recent_filings<br/>get_financial_ratios<br/>search_filings"}}
+        LLM <--> Tools
+    end
+    Tools --> XBRL
+    Tools --> Store
+
+    LLM --> Memo["One-page credit memo<br/>every claim cited to a filing"]
+
+    subgraph EvalHarness["Eval harness"]
+        direction TB
+        Dataset[("Hand-labeled<br/>Q&A pairs")]
+        Judge["LLM judge<br/>accuracy + hallucination rate"]
+    end
+    Dataset --> LLM
+    LLM -. answer + evidence .-> Judge
+```
+
 - **`edgar/`** — SEC EDGAR client (no API key; SEC just requires a contact
   email in the User-Agent header) + XBRL parser that computes current ratio,
   debt/equity, debt/EBITDA (approx), and interest coverage directly from a
@@ -39,7 +80,7 @@ first-pass risk memo before real analysis starts.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-cp .env.example .env   # fill in ANTHROPIC_API_KEY and SEC_EDGAR_USER_AGENT
+cp .env.example .env   # fill in an API key (Anthropic or Gemini) and SEC_EDGAR_USER_AGENT
 ```
 
 `SEC_EDGAR_USER_AGENT` just needs to look like `"YourApp yourname@email.com"`
