@@ -3,7 +3,8 @@ then use an LLM judge to score correctness and grounding.
 
 Produces two numbers worth quoting:
   - accuracy: fraction of answers that match the gold answer in substance
-  - hallucination_rate: fraction of answers NOT backed by a specific filing citation
+  - hallucination_rate: fraction of answers with no tool-backed evidence at
+    all (neither a quoted filing excerpt nor an as-of-dated ratio)
 """
 from __future__ import annotations
 
@@ -26,13 +27,14 @@ JUDGE_PROMPT = """You are grading an AI credit-research assistant's answer. Resp
 Question: {question}
 Gold answer (ground truth): {gold_answer}
 Assistant's answer: {answer}
-Assistant's cited sources: {citations}
+Assistant's tool-backed evidence: {evidence}
 
 Score:
 - "correct": true if the assistant's answer matches the gold answer in substance \
 (numbers within ~5%, same qualitative conclusion), false otherwise.
-- "grounded": true if the assistant cites a specific filing (form + filing date or \
-accession number) to support its claim, false if it asserts facts with no citation.
+- "grounded": true if the assistant's claim is backed by at least one piece of the \
+tool-backed evidence above (a quoted filing excerpt, or ratios computed as-of a \
+specific filing date both count), false if it asserts facts with no tool backing at all.
 
 Return exactly: {{"correct": true/false, "grounded": true/false, "reason": "<one sentence>"}}
 """
@@ -41,6 +43,16 @@ Return exactly: {{"correct": true/false, "grounded": true/false, "reason": "<one
 def _extract_json(text: str) -> dict:
     match = re.search(r"\{.*\}", text, re.DOTALL)
     return json.loads(match.group(0) if match else text)
+
+
+def _summarize_for_judge(evidence: list[dict]) -> list[str]:
+    summaries = []
+    for e in evidence:
+        if "accessionNumber" in e:
+            summaries.append(f"{e['form']} filed {e['filingDate']}: \"{e.get('excerpt', '')[:150]}\"")
+        elif "as_of" in e:
+            summaries.append(f"financial ratios computed as of {e['as_of']} (XBRL)")
+    return summaries or ["none"]
 
 
 def _build_judge():
@@ -93,16 +105,15 @@ def run_eval(dataset_path: str) -> dict:
 
     results = []
     for case in cases:
-        answer, citations = agent.answer_question(case["ticker"], case["question"])
-        citation_summary = [f"{c['form']} filed {c['filingDate']}" for c in citations] or ["none"]
+        answer, evidence = agent.answer_question(case["ticker"], case["question"])
         prompt = JUDGE_PROMPT.format(
             question=case["question"],
             gold_answer=case["gold_answer"],
             answer=answer,
-            citations=citation_summary,
+            evidence=_summarize_for_judge(evidence),
         )
         verdict = _extract_json(judge(prompt))
-        results.append({**case, "answer": answer, "citations": citations, **verdict})
+        results.append({**case, "answer": answer, "evidence": evidence, **verdict})
         print(f"[{'OK' if verdict['correct'] else 'MISS'}] {case['question']}")
 
     accuracy = mean(1.0 if r["correct"] else 0.0 for r in results)

@@ -71,13 +71,9 @@ python -m creditlens.eval.harness src/creditlens/eval/dataset.jsonl
 ```
 
 Reports `accuracy` (gold-answer match) and `hallucination_rate` (fraction of
-answers with no filing citation).
-
-**Caveat:** `hallucination_rate` currently only counts a `search_filings`
-citation as "grounded." Answers built from `get_financial_ratios` alone
-(also real, live XBRL data — just not an excerpt with a form/date attached)
-show up as ungrounded. Worth extending before quoting this number anywhere
-that matters.
+answers backed by no tool evidence at all — a quoted filing excerpt from
+`search_filings` and an as-of-dated ratio from `get_financial_ratios` both
+count as grounded; only an unsupported assertion counts as a hallucination).
 
 ## Notes / next steps
 

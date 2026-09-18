@@ -19,7 +19,7 @@ from google.genai import types
 
 from .memo import MEMO_SYSTEM_PROMPT, QA_SYSTEM_PROMPT
 from .rate_limiter import RateLimiter
-from .tools import TOOLS, ToolRuntime
+from .tools import TOOLS, ToolRuntime, summarize_evidence
 
 DEFAULT_MODEL = "gemini-flash-lite-latest"
 MAX_TOOL_TURNS = 6
@@ -86,7 +86,7 @@ class GeminiAgent:
 
     def _run_tool_loop(self, system_prompt: str, user_message: str) -> tuple[str, list[dict]]:
         contents = [types.Content(role="user", parts=[types.Part(text=user_message)])]
-        all_citations: list[dict] = []
+        all_evidence: list[dict] = []
 
         for _ in range(MAX_TOOL_TURNS):
             response = self._generate(system_prompt, contents)
@@ -95,17 +95,17 @@ class GeminiAgent:
 
             function_calls = [p.function_call for p in candidate.content.parts if p.function_call]
             if not function_calls:
-                return response.text or "", all_citations
+                return response.text or "", all_evidence
 
             response_parts = []
             for fc in function_calls:
-                result = self.runtime.run(fc.name, dict(fc.args))
-                if fc.name == "search_filings":
-                    all_citations.extend(result.get("citations", []))
+                fc_input = dict(fc.args)
+                result = self.runtime.run(fc.name, fc_input)
+                all_evidence.extend(summarize_evidence(fc.name, fc_input, result))
                 response_parts.append(types.Part.from_function_response(name=fc.name, response=result))
             contents.append(types.Content(role="user", parts=response_parts))
 
-        return "Ran out of tool-call turns before reaching a final answer.", all_citations
+        return "Ran out of tool-call turns before reaching a final answer.", all_evidence
 
     def draft_memo(self, ticker: str) -> tuple[str, list[dict]]:
         return self._run_tool_loop(MEMO_SYSTEM_PROMPT, f"Draft a one-page credit memo for {ticker}.")

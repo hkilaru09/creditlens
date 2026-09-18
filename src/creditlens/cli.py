@@ -43,20 +43,25 @@ def main() -> None:
     agent = build_agent(runtime)
 
     if args.question:
-        answer, citations = agent.answer_question(ticker, args.question)
+        answer, evidence = agent.answer_question(ticker, args.question)
     else:
-        answer, citations = agent.draft_memo(ticker)
+        answer, evidence = agent.draft_memo(ticker)
 
     print()
     print(answer)
-    if citations:
-        print("\n--- sources cited ---")
+    if evidence:
+        print("\n--- evidence used ---")
         seen = set()
-        for c in citations:
-            key = (c["form"], c["filingDate"], c["accessionNumber"])
+        for e in evidence:
+            if "accessionNumber" in e:
+                key = ("filing", e["form"], e["filingDate"], e["accessionNumber"])
+                line = f"- {e['form']} filed {e['filingDate']} (accession {e['accessionNumber']})"
+            else:
+                key = ("ratios", e.get("ticker"), e["as_of"])
+                line = f"- financial ratios as of {e['as_of']} (XBRL, {e.get('ticker')})"
             if key not in seen:
                 seen.add(key)
-                print(f"- {c['form']} filed {c['filingDate']} (accession {c['accessionNumber']})")
+                print(line)
 
 
 if __name__ == "__main__":

@@ -98,3 +98,42 @@ class ToolRuntime:
             return {"citations": citations}
 
         raise ValueError(f"Unknown tool: {name}")
+
+
+def summarize_evidence(name: str, tool_input: dict, result: dict) -> list[dict]:
+    """Turns one tool call's result into grounding records.
+
+    Every tool that pulls real filing data produces evidence, not just
+    search_filings — a ratio computed as-of a specific 10-K date is just as
+    grounded as a quoted excerpt, it just doesn't come with quoted text.
+    """
+    if name == "search_filings":
+        return [
+            {
+                "tool": name,
+                "form": c["form"],
+                "filingDate": c["filingDate"],
+                "accessionNumber": c["accessionNumber"],
+                "excerpt": c["excerpt"],
+            }
+            for c in result.get("citations", [])
+        ]
+
+    if name == "get_financial_ratios":
+        as_of = result.get("as_of")
+        if not as_of:
+            return []
+        return [{"tool": name, "ticker": tool_input.get("ticker"), "as_of": as_of}]
+
+    if name == "list_recent_filings":
+        return [
+            {
+                "tool": name,
+                "form": f["form"],
+                "filingDate": f["filingDate"],
+                "accessionNumber": f["accessionNumber"],
+            }
+            for f in result.get("filings", [])
+        ]
+
+    return []
