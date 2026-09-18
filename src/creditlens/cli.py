@@ -3,7 +3,7 @@ import os
 
 from dotenv import load_dotenv
 
-from .agent.orchestrator import Agent
+from .agent.factory import build_agent
 from .agent.tools import ToolRuntime
 from .edgar.client import EdgarClient
 from .rag.embeddings import embed_texts
@@ -40,7 +40,7 @@ def main() -> None:
             print(f"Indexed {n} chunks from {filing['form']} filed {filing['filingDate']}")
 
     runtime = ToolRuntime(edgar, store, embed_texts)
-    agent = Agent(runtime)
+    agent = build_agent(runtime)
 
     if args.question:
         answer, citations = agent.answer_question(ticker, args.question)

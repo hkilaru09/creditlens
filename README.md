@@ -18,11 +18,17 @@ first-pass risk memo before real analysis starts.
   locally with `sentence-transformers` (no API key), and stores them in a
   local Chroma DB. Retrieval returns excerpts tagged with form/date/accession
   number for citation.
-- **`agent/`** — Claude tool-use loop. The model is given three tools
-  (`list_recent_filings`, `get_financial_ratios`, `search_filings`) and
-  chains its own calls to draft the memo or answer a specific question. This
-  is the same shape of tool-calling MCP formalizes, implemented natively
-  since the whole thing runs as one script rather than a standalone server.
+- **`agent/`** — a tool-use loop with three tools (`list_recent_filings`,
+  `get_financial_ratios`, `search_filings`) that the model chains on its own
+  to draft the memo or answer a specific question. This is the same shape of
+  tool-calling MCP formalizes, implemented natively since the whole thing
+  runs as one script rather than a standalone server. Two interchangeable
+  backends implement the same `draft_memo`/`answer_question` interface:
+  `orchestrator.Agent` (Claude, `anthropic` SDK) and
+  `gemini_backend.GeminiAgent` (Gemini, `google-genai` SDK, with a
+  self-imposed rate limiter and retry/backoff on 429/503s since free-tier
+  Gemini quotas can be very low per model). `agent/factory.py` picks one
+  based on which API key is set, or `LLM_PROVIDER=anthropic|gemini`.
 - **`eval/`** — a small hand-labeled Q&A benchmark (`dataset.jsonl`) scored
   by an LLM-judge pass for **accuracy** (does the answer match the gold
   answer) and **hallucination rate** (is every claim backed by a citation).
@@ -66,6 +72,12 @@ python -m creditlens.eval.harness src/creditlens/eval/dataset.jsonl
 
 Reports `accuracy` (gold-answer match) and `hallucination_rate` (fraction of
 answers with no filing citation).
+
+**Caveat:** `hallucination_rate` currently only counts a `search_filings`
+citation as "grounded." Answers built from `get_financial_ratios` alone
+(also real, live XBRL data — just not an excerpt with a form/date attached)
+show up as ungrounded. Worth extending before quoting this number anywhere
+that matters.
 
 ## Notes / next steps
 

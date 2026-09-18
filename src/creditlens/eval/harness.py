@@ -1,5 +1,5 @@
 """Small eval harness: run each hand-labeled Q&A pair through the agent,
-then use Claude as a judge to score correctness and grounding.
+then use an LLM judge to score correctness and grounding.
 
 Produces two numbers worth quoting:
   - accuracy: fraction of answers that match the gold answer in substance
@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from statistics import mean
 
-from anthropic import Anthropic
 from dotenv import load_dotenv
 
-from ..agent.orchestrator import Agent
+from ..agent.factory import build_agent, has_key
 from ..agent.tools import ToolRuntime
 from ..edgar.client import EdgarClient
 from ..rag.embeddings import embed_texts
@@ -38,35 +38,55 @@ Return exactly: {{"correct": true/false, "grounded": true/false, "reason": "<one
 """
 
 
-def _judge(client: Anthropic, question: str, gold_answer: str, answer: str, citations: list[dict]) -> dict:
-    citation_summary = [f"{c['form']} filed {c['filingDate']}" for c in citations] or ["none"]
-    resp = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=300,
-        messages=[
-            {
-                "role": "user",
-                "content": JUDGE_PROMPT.format(
-                    question=question,
-                    gold_answer=gold_answer,
-                    answer=answer,
-                    citations=citation_summary,
-                ),
-            }
-        ],
-    )
-    text = "".join(b.text for b in resp.content if b.type == "text")
-    return json.loads(text)
+def _extract_json(text: str) -> dict:
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    return json.loads(match.group(0) if match else text)
+
+
+def _build_judge():
+    """Prefer Claude as judge for consistency; fall back to Gemini if that's
+    the only key available."""
+    if has_key("ANTHROPIC_API_KEY"):
+        from anthropic import Anthropic
+
+        client = Anthropic()
+
+        def judge(prompt: str) -> str:
+            resp = client.messages.create(
+                model="claude-sonnet-5", max_tokens=300, messages=[{"role": "user", "content": prompt}]
+            )
+            return "".join(b.text for b in resp.content if b.type == "text")
+
+        return judge
+
+    if has_key("GEMINI_API_KEY"):
+        from google import genai
+
+        from ..agent.gemini_backend import DEFAULT_MODEL, call_with_retry
+        from ..agent.rate_limiter import RateLimiter
+
+        client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        limiter = RateLimiter(max_calls=int(os.environ.get("GEMINI_RATE_LIMIT_PER_MIN", "60")))
+
+        def judge(prompt: str) -> str:
+            resp = call_with_retry(
+                limiter, lambda: client.models.generate_content(model=DEFAULT_MODEL, contents=prompt)
+            )
+            return resp.text
+
+        return judge
+
+    raise RuntimeError("No usable API key found for the judge model.")
 
 
 def run_eval(dataset_path: str) -> dict:
     load_dotenv()
-    client = Anthropic()
 
     edgar = EdgarClient(os.environ.get("SEC_EDGAR_USER_AGENT"))
     store = FilingVectorStore(persist_dir="data/chroma", collection_name="filings")
     runtime = ToolRuntime(edgar, store, embed_texts)
-    agent = Agent(runtime, client=client)
+    agent = build_agent(runtime)
+    judge = _build_judge()
 
     with open(dataset_path) as f:
         cases = [json.loads(line) for line in f if line.strip()]
@@ -74,7 +94,14 @@ def run_eval(dataset_path: str) -> dict:
     results = []
     for case in cases:
         answer, citations = agent.answer_question(case["ticker"], case["question"])
-        verdict = _judge(client, case["question"], case["gold_answer"], answer, citations)
+        citation_summary = [f"{c['form']} filed {c['filingDate']}" for c in citations] or ["none"]
+        prompt = JUDGE_PROMPT.format(
+            question=case["question"],
+            gold_answer=case["gold_answer"],
+            answer=answer,
+            citations=citation_summary,
+        )
+        verdict = _extract_json(judge(prompt))
         results.append({**case, "answer": answer, "citations": citations, **verdict})
         print(f"[{'OK' if verdict['correct'] else 'MISS'}] {case['question']}")
 
